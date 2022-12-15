@@ -34,6 +34,10 @@
 #include "mbedtls/ssl.h"
 #include "mbedtls/cipher.h"
 
+#if defined(MBEDTLS_HAVE_TIME)
+#include "mbedtls/platform_time.h"
+#endif
+
 #if defined(MBEDTLS_USE_PSA_CRYPTO)
 #include "psa/crypto.h"
 #endif
@@ -56,7 +60,9 @@ typedef struct
 {
     unsigned char MBEDTLS_PRIVATE(name)[MBEDTLS_SSL_TICKET_KEY_NAME_BYTES];
                                                      /*!< random key identifier              */
-    uint32_t MBEDTLS_PRIVATE(generation_time);       /*!< key generation timestamp (seconds) */
+#if defined(MBEDTLS_HAVE_TIME)
+    mbedtls_time_t MBEDTLS_PRIVATE(generation_time); /*!< key generation timestamp (seconds) */
+#endif
 #if !defined(MBEDTLS_USE_PSA_CRYPTO)
     mbedtls_cipher_context_t MBEDTLS_PRIVATE(ctx);   /*!< context for auth enc/decryption    */
 #else
@@ -77,9 +83,9 @@ typedef struct
     unsigned char MBEDTLS_PRIVATE(active);           /*!< index of the currently active key  */
 
     uint32_t MBEDTLS_PRIVATE(ticket_lifetime);       /*!< lifetime of tickets in seconds     */
-#if defined(MBEDTLS_SSL_NEW_SESSION_TICKET) && defined(MBEDTLS_SSL_PROTO_TLS1_3)
+#if defined(MBEDTLS_SSL_PROTO_TLS1_3)
     mbedtls_ssl_ticket_flags MBEDTLS_PRIVATE(flags); /*!< ticket flags                       */
-#endif /* MBEDTLS_SSL_NEW_SESSION_TICKET && MBEDTLS_SSL_PROTO_TLS1_3  */
+#endif /* MBEDTLS_SSL_PROTO_TLS1_3  */
 
     /** Callback for getting (pseudo-)random numbers                        */
     int  (*MBEDTLS_PRIVATE(f_rng))(void *, unsigned char *, size_t);

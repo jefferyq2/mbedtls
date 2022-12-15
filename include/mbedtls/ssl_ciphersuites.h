@@ -272,12 +272,12 @@ typedef enum {
     MBEDTLS_KEY_EXCHANGE_DHE_RSA,
     MBEDTLS_KEY_EXCHANGE_ECDHE_RSA,
     MBEDTLS_KEY_EXCHANGE_ECDHE_ECDSA,
-    MBEDTLS_KEY_EXCHANGE_PSK,        // available in TLS/DTLS 1.3
+    MBEDTLS_KEY_EXCHANGE_PSK,
     MBEDTLS_KEY_EXCHANGE_DHE_PSK,
     MBEDTLS_KEY_EXCHANGE_RSA_PSK,
-    MBEDTLS_KEY_EXCHANGE_ECDHE_PSK,  // available in TLS/DTLS 1.3
+    MBEDTLS_KEY_EXCHANGE_ECDHE_PSK,
     MBEDTLS_KEY_EXCHANGE_ECDH_RSA,
-    MBEDTLS_KEY_EXCHANGE_ECDH_ECDSA, // available in TLS/DTLS 1.3
+    MBEDTLS_KEY_EXCHANGE_ECDH_ECDSA,
     MBEDTLS_KEY_EXCHANGE_ECJPAKE,
 } mbedtls_key_exchange_type_t;
 
@@ -290,6 +290,11 @@ typedef enum {
     defined(MBEDTLS_KEY_EXCHANGE_ECDH_RSA_ENABLED)      || \
     defined(MBEDTLS_KEY_EXCHANGE_ECDH_ECDSA_ENABLED)
 #define MBEDTLS_KEY_EXCHANGE_WITH_CERT_ENABLED
+#endif
+
+#if defined(MBEDTLS_KEY_EXCHANGE_WITH_CERT_ENABLED) || \
+    defined(MBEDTLS_SSL_TLS1_3_KEY_EXCHANGE_MODE_EPHEMERAL_ENABLED)
+#define MBEDTLS_SSL_HANDSHAKE_WITH_CERT_ENABLED
 #endif
 
 /* Key exchanges allowing client certificate requests */
@@ -341,6 +346,11 @@ typedef enum {
 #define MBEDTLS_KEY_EXCHANGE_SOME_PSK_ENABLED
 #endif
 
+#if defined(MBEDTLS_KEY_EXCHANGE_SOME_PSK_ENABLED) || \
+    defined(MBEDTLS_SSL_TLS1_3_KEY_EXCHANGE_MODE_SOME_PSK_ENABLED)
+#define MBEDTLS_SSL_HANDSHAKE_WITH_PSK_ENABLED
+#endif
+
 /* Key exchanges using DHE */
 #if defined(MBEDTLS_KEY_EXCHANGE_DHE_RSA_ENABLED)       || \
     defined(MBEDTLS_KEY_EXCHANGE_DHE_PSK_ENABLED)
@@ -386,17 +396,6 @@ const int *mbedtls_ssl_list_ciphersuites( void );
 
 const mbedtls_ssl_ciphersuite_t *mbedtls_ssl_ciphersuite_from_string( const char *ciphersuite_name );
 const mbedtls_ssl_ciphersuite_t *mbedtls_ssl_ciphersuite_from_id( int ciphersuite_id );
-
-#if defined(MBEDTLS_SSL_PROTO_TLS1_3)
-/**
-* \brief           Returns the size of the hash function output given the ciphersuite
-*
-* \param ciphersuite   mbedtls_ssl_ciphersuite_t
-*
-* \return          Size of output in bytes, -1 in case of error
-*/
-unsigned int mbedtls_hash_size_for_ciphersuite(const mbedtls_ssl_ciphersuite_t* ciphersuite);
-#endif /* MBEDTLS_SSL_PROTO_TLS1_3 */
 
 #if defined(MBEDTLS_PK_C)
 mbedtls_pk_type_t mbedtls_ssl_get_ciphersuite_sig_pk_alg( const mbedtls_ssl_ciphersuite_t *info );

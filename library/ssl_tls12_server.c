@@ -21,13 +21,7 @@
 
 #if defined(MBEDTLS_SSL_SRV_C) && defined(MBEDTLS_SSL_PROTO_TLS1_2)
 
-#if defined(MBEDTLS_PLATFORM_C)
 #include "mbedtls/platform.h"
-#else
-#include <stdlib.h>
-#define mbedtls_calloc    calloc
-#define mbedtls_free      free
-#endif
 
 #include "mbedtls/ssl.h"
 #include "ssl_misc.h"
@@ -36,6 +30,7 @@
 #include "mbedtls/platform_util.h"
 #include "constant_time_internal.h"
 #include "mbedtls/constant_time.h"
+#include "hash_info.h"
 
 #include <string.h>
 
@@ -695,11 +690,13 @@ static int ssl_pick_cert( mbedtls_ssl_context *ssl,
 #endif
         list = ssl->conf->key_cert;
 
+    int pk_alg_is_none = 0;
 #if defined(MBEDTLS_USE_PSA_CRYPTO)
-    if( pk_alg == PSA_ALG_NONE )
+    pk_alg_is_none = ( pk_alg == PSA_ALG_NONE );
 #else
-    if( pk_alg == MBEDTLS_PK_NONE )
+    pk_alg_is_none = ( pk_alg == MBEDTLS_PK_NONE );
 #endif /* MBEDTLS_USE_PSA_CRYPTO */
+    if( pk_alg_is_none )
         return( 0 );
 
     MBEDTLS_SSL_DEBUG_MSG( 3, ( "ciphersuite requires certificate" ) );
@@ -716,18 +713,21 @@ static int ssl_pick_cert( mbedtls_ssl_context *ssl,
         MBEDTLS_SSL_DEBUG_CRT( 3, "candidate certificate chain, certificate",
                           cur->cert );
 
+        int key_type_matches = 0;
 #if defined(MBEDTLS_USE_PSA_CRYPTO)
 #if defined(MBEDTLS_SSL_ASYNC_PRIVATE)
-        if( ( ssl->conf->f_async_sign_start == NULL &&
-              ssl->conf->f_async_decrypt_start == NULL &&
-              ! mbedtls_pk_can_do_ext( cur->key, pk_alg, pk_usage ) ) ||
-            ! mbedtls_pk_can_do_ext( &cur->cert->pk, pk_alg, pk_usage ) )
+        key_type_matches = ( ( ssl->conf->f_async_sign_start != NULL ||
+                    ssl->conf->f_async_decrypt_start != NULL ||
+                    mbedtls_pk_can_do_ext( cur->key, pk_alg, pk_usage ) ) &&
+                mbedtls_pk_can_do_ext( &cur->cert->pk, pk_alg, pk_usage ) );
 #else
-        if( ! mbedtls_pk_can_do_ext( cur->key, pk_alg, pk_usage ) )
+        key_type_matches = (
+                mbedtls_pk_can_do_ext( cur->key, pk_alg, pk_usage ) );
 #endif /* MBEDTLS_SSL_ASYNC_PRIVATE */
 #else
-        if( ! mbedtls_pk_can_do( &cur->cert->pk, pk_alg ) )
+        key_type_matches = mbedtls_pk_can_do( &cur->cert->pk, pk_alg );
 #endif /* MBEDTLS_USE_PSA_CRYPTO */
+        if( !key_type_matches )
         {
             MBEDTLS_SSL_DEBUG_MSG( 3, ( "certificate mismatch: key type" ) );
             continue;
@@ -904,6 +904,8 @@ static int ssl_parse_client_hello( mbedtls_ssl_context *ssl )
 
     MBEDTLS_SSL_DEBUG_MSG( 2, ( "=> parse client hello" ) );
 
+    int renegotiating;
+
 #if defined(MBEDTLS_SSL_DTLS_ANTI_REPLAY)
 read_record_header:
 #endif
@@ -912,9 +914,11 @@ read_record_header:
      * otherwise read it ourselves manually in order to support SSLv2
      * ClientHello, which doesn't use the same record layer format.
      */
+    renegotiating = 0;
 #if defined(MBEDTLS_SSL_RENEGOTIATION)
-    if( ssl->renego_status == MBEDTLS_SSL_INITIAL_HANDSHAKE )
+    renegotiating = ( ssl->renego_status != MBEDTLS_SSL_INITIAL_HANDSHAKE );
 #endif
+    if( !renegotiating )
     {
         if( ( ret = mbedtls_ssl_fetch_input( ssl, 5 ) ) != 0 )
         {
@@ -1280,7 +1284,10 @@ read_record_header:
                    buf + ciph_offset + 2,  ciph_len );
 
     /*
-     * Check the compression algorithms length and pick one
+     * Check the compression algorithm's length.
+     * The list contents are ignored because implementing
+     * MBEDTLS_SSL_COMPRESS_NULL is mandatory and is the only
+     * option supported by Mbed TLS.
      */
     comp_offset = ciph_offset + 2 + ciph_len;
 
@@ -1299,12 +1306,6 @@ read_record_header:
     MBEDTLS_SSL_DEBUG_BUF( 3, "client hello, compression",
                       buf + comp_offset + 1, comp_len );
 
-    ssl->session_negotiate->compression = MBEDTLS_SSL_COMPRESS_NULL;
-    /* See comments in ssl_write_client_hello() */
-#if defined(MBEDTLS_SSL_PROTO_DTLS)
-    if( ssl->conf->transport == MBEDTLS_SSL_TRANSPORT_DATAGRAM )
-        ssl->session_negotiate->compression = MBEDTLS_SSL_COMPRESS_NULL;
-#endif
         /*
          * Check the extension length
          */
@@ -2162,8 +2163,7 @@ static void ssl_handle_id_based_session_resumption( mbedtls_ssl_context *ssl )
     if( ret != 0 )
         goto exit;
 
-    if( session->ciphersuite != session_tmp.ciphersuite ||
-        session->compression != session_tmp.compression )
+    if( session->ciphersuite != session_tmp.ciphersuite )
     {
         /* Mismatch between cached and negotiated session */
         goto exit;
@@ -2313,12 +2313,12 @@ static int ssl_write_server_hello( mbedtls_ssl_context *ssl )
 
     MBEDTLS_PUT_UINT16_BE( ssl->session_negotiate->ciphersuite, p, 0 );
     p += 2;
-    *p++ = MBEDTLS_BYTE_0( ssl->session_negotiate->compression );
+    *p++ = MBEDTLS_BYTE_0( MBEDTLS_SSL_COMPRESS_NULL );
 
     MBEDTLS_SSL_DEBUG_MSG( 3, ( "server hello, chosen ciphersuite: %s",
            mbedtls_ssl_get_ciphersuite_name( ssl->session_negotiate->ciphersuite ) ) );
     MBEDTLS_SSL_DEBUG_MSG( 3, ( "server hello, compress alg.: 0x%02X",
-                   (unsigned int) ssl->session_negotiate->compression ) );
+                   (unsigned int) MBEDTLS_SSL_COMPRESS_NULL ) );
 
     /*
      *  First write extensions, then the total length
@@ -3045,11 +3045,8 @@ curve_matching_done:
 
         size_t dig_signed_len = ssl->out_msg + ssl->out_msglen - dig_signed;
         size_t hashlen = 0;
-#if defined(MBEDTLS_USE_PSA_CRYPTO)
-        unsigned char hash[PSA_HASH_MAX_SIZE];
-#else
-        unsigned char hash[MBEDTLS_MD_MAX_SIZE];
-#endif
+        unsigned char hash[MBEDTLS_HASH_MAX_SIZE];
+
         int ret = MBEDTLS_ERR_ERROR_CORRUPTION_DETECTED;
 
         /*
@@ -3391,8 +3388,14 @@ static int ssl_decrypt_encrypted_pms( mbedtls_ssl_context *ssl,
                                       size_t peer_pmssize )
 {
     int ret = MBEDTLS_ERR_ERROR_CORRUPTION_DETECTED;
+
+    mbedtls_x509_crt *own_cert = mbedtls_ssl_own_cert( ssl );
+    if( own_cert == NULL ) {
+        MBEDTLS_SSL_DEBUG_MSG( 1, ( "got no local certificate" ) );
+        return( MBEDTLS_ERR_SSL_NO_CLIENT_CERTIFICATE );
+    }
+    mbedtls_pk_context *public_key = &own_cert->pk;
     mbedtls_pk_context *private_key = mbedtls_ssl_own_key( ssl );
-    mbedtls_pk_context *public_key = &mbedtls_ssl_own_cert( ssl )->pk;
     size_t len = mbedtls_pk_get_len( public_key );
 
 #if defined(MBEDTLS_SSL_ASYNC_PRIVATE)

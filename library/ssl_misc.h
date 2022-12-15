@@ -30,7 +30,9 @@
 #if defined(MBEDTLS_USE_PSA_CRYPTO) || defined(MBEDTLS_SSL_PROTO_TLS1_3)
 #include "psa/crypto.h"
 #include "mbedtls/psa_util.h"
+#include "hash_info.h"
 #endif
+#include "mbedtls/legacy_or_psa.h"
 
 #if defined(MBEDTLS_MD5_C)
 #include "mbedtls/md5.h"
@@ -192,9 +194,9 @@
 
 #if defined(MBEDTLS_SSL_SOME_SUITES_USE_MAC)
 /* Ciphersuites using HMAC */
-#if defined(MBEDTLS_SHA384_C)
+#if defined(MBEDTLS_HAS_ALG_SHA_384_VIA_MD_OR_PSA_BASED_ON_USE_PSA)
 #define MBEDTLS_SSL_MAC_ADD                 48  /* SHA-384 used for HMAC */
-#elif defined(MBEDTLS_SHA256_C)
+#elif defined(MBEDTLS_HAS_ALG_SHA_256_VIA_MD_OR_PSA_BASED_ON_USE_PSA)
 #define MBEDTLS_SSL_MAC_ADD                 32  /* SHA-256 used for HMAC */
 #else
 #define MBEDTLS_SSL_MAC_ADD                 20  /* SHA-1   used for HMAC */
@@ -255,7 +257,7 @@
 
 #define MBEDTLS_RECEIVED_SIG_ALGS_SIZE         20
 
-#if defined(MBEDTLS_KEY_EXCHANGE_WITH_CERT_ENABLED)
+#if defined(MBEDTLS_SSL_HANDSHAKE_WITH_CERT_ENABLED)
 
 #define MBEDTLS_TLS_SIG_NONE MBEDTLS_TLS1_3_SIG_NONE
 
@@ -265,7 +267,7 @@
 #define MBEDTLS_SSL_TLS12_HASH_ALG_FROM_SIG_AND_HASH_ALG(alg) (alg >> 8)
 #endif /* MBEDTLS_SSL_PROTO_TLS1_2 */
 
-#endif /* MBEDTLS_KEY_EXCHANGE_WITH_CERT_ENABLED */
+#endif /* MBEDTLS_SSL_HANDSHAKE_WITH_CERT_ENABLED */
 
 /*
  * Check that we obey the standard's message size bounds
@@ -570,11 +572,9 @@ struct mbedtls_ssl_handshake_params
     uint8_t certificate_request_sent;
 #endif /* MBEDTLS_SSL_SRV_C */
 
-#if defined(MBEDTLS_SSL_SESSION_TICKETS) || \
-    ( defined(MBEDTLS_SSL_NEW_SESSION_TICKET) && defined(MBEDTLS_SSL_PROTO_TLS1_3) )
+#if defined(MBEDTLS_SSL_SESSION_TICKETS)
     uint8_t new_session_ticket;         /*!< use NewSessionTicket?    */
-#endif /* MBEDTLS_SSL_SESSION_TICKETS ||
-          ( MBEDTLS_SSL_NEW_SESSION_TICKET && MBEDTLS_SSL_PROTO_TLS1_3 ) */
+#endif /* MBEDTLS_SSL_SESSION_TICKETS */
 
 #if defined(MBEDTLS_SSL_CLI_C)
     /** Minimum TLS version to be negotiated.
@@ -628,7 +628,6 @@ struct mbedtls_ssl_handshake_params
     size_t ecrs_n;                      /*!< place for saving a length      */
 #endif
 
-    size_t pmslen;                      /*!<  premaster length              */
     mbedtls_ssl_ciphersuite_t const *ciphersuite_info;
 
     void (*update_checksum)(mbedtls_ssl_context *, const unsigned char *, size_t);
@@ -642,21 +641,28 @@ struct mbedtls_ssl_handshake_params
      * Handshake specific crypto variables
      */
 #if defined(MBEDTLS_SSL_PROTO_TLS1_3)
-    unsigned int key_exchange; /* Indication of the key exchange algorithm being negotiated*/
-    int tls13_kex_modes; /*!< key exchange modes for TLS 1.3 */
 #if defined(MBEDTLS_SSL_TLS1_3_COMPATIBILITY_MODE)
     int ccs_sent; /* Number of CCS messages sent */
 #endif /* MBEDTLS_SSL_TLS1_3_COMPATIBILITY_MODE */
+    uint8_t key_exchange_mode; /*!< Selected key exchange mode */
 
     /** Number of HelloRetryRequest messages received/sent from/to the server. */
     int hello_retry_request_count;
+
 #if defined(MBEDTLS_SSL_SRV_C)
     /** selected_group of key_share extension in HelloRetryRequest message. */
     uint16_t hrr_selected_group;
+#if defined(MBEDTLS_SSL_TLS1_3_KEY_EXCHANGE_MODE_SOME_PSK_ENABLED)
+    uint8_t tls13_kex_modes; /*!< Key exchange modes supported by the client */
+#endif
+#if defined(MBEDTLS_SSL_SESSION_TICKETS)
+    uint16_t new_session_tickets_count;         /*!< number of session tickets */
+#endif
 #endif /* MBEDTLS_SSL_SRV_C */
+
 #endif /* MBEDTLS_SSL_PROTO_TLS1_3 */
 
-#if defined(MBEDTLS_KEY_EXCHANGE_WITH_CERT_ENABLED)
+#if defined(MBEDTLS_SSL_HANDSHAKE_WITH_CERT_ENABLED)
     uint16_t received_sig_algs[MBEDTLS_RECEIVED_SIG_ALGS_SIZE];
 #endif
 
@@ -702,7 +708,7 @@ struct mbedtls_ssl_handshake_params
     const mbedtls_ecp_curve_info **curves;      /*!<  Supported elliptic curves */
 #endif
 
-#if defined(MBEDTLS_KEY_EXCHANGE_SOME_PSK_ENABLED)
+#if defined(MBEDTLS_SSL_HANDSHAKE_WITH_PSK_ENABLED)
 #if defined(MBEDTLS_USE_PSA_CRYPTO)
     mbedtls_svc_key_id_t psk_opaque;            /*!< Opaque PSK from the callback   */
     uint8_t psk_opaque_is_internal;
@@ -710,7 +716,8 @@ struct mbedtls_ssl_handshake_params
     unsigned char *psk;                 /*!<  PSK from the callback         */
     size_t psk_len;                     /*!<  Length of PSK from callback   */
 #endif /* MBEDTLS_USE_PSA_CRYPTO */
-#endif /* MBEDTLS_KEY_EXCHANGE_SOME_PSK_ENABLED */
+    uint16_t    selected_identity;
+#endif /* MBEDTLS_SSL_HANDSHAKE_WITH_PSK_ENABLED */
 
 #if defined(MBEDTLS_SSL_ECP_RESTARTABLE_ENABLED)
     mbedtls_x509_crt_restart_ctx ecrs_ctx;  /*!< restart context            */
@@ -812,18 +819,18 @@ struct mbedtls_ssl_handshake_params
     /*
      * Checksum contexts
      */
-#if defined(MBEDTLS_SHA256_C)
+#if defined(MBEDTLS_HAS_ALG_SHA_256_VIA_MD_OR_PSA_BASED_ON_USE_PSA)
 #if defined(MBEDTLS_USE_PSA_CRYPTO)
     psa_hash_operation_t fin_sha256_psa;
 #else
     mbedtls_sha256_context fin_sha256;
 #endif
 #endif
-#if defined(MBEDTLS_SHA384_C)
+#if defined(MBEDTLS_HAS_ALG_SHA_384_VIA_MD_OR_PSA_BASED_ON_USE_PSA)
 #if defined(MBEDTLS_USE_PSA_CRYPTO)
     psa_hash_operation_t fin_sha384_psa;
 #else
-    mbedtls_sha512_context fin_sha512;
+    mbedtls_sha512_context fin_sha384;
 #endif
 #endif
 
@@ -970,14 +977,18 @@ struct mbedtls_ssl_handshake_params
 
 #endif /* MBEDTLS_SSL_PROTO_TLS1_3 */
 
-    unsigned char premaster[MBEDTLS_PREMASTER_SIZE]; /*!<  premaster secret */
+#if defined(MBEDTLS_SSL_PROTO_TLS1_2)
+    unsigned char premaster[MBEDTLS_PREMASTER_SIZE];
+                                        /*!<  premaster secret        */
+    size_t pmslen;                      /*!<  premaster length        */
+#endif
 
 #if defined(MBEDTLS_SSL_PROTO_TLS1_3)
     int extensions_present;             /*!< extension presence; Each bitfield
                                              represents an extension and defined
                                              as \c MBEDTLS_SSL_EXT_XXX */
 
-#if defined(MBEDTLS_KEY_EXCHANGE_WITH_CERT_ENABLED)
+#if defined(MBEDTLS_SSL_HANDSHAKE_WITH_CERT_ENABLED)
     unsigned char certificate_request_context_len;
     unsigned char *certificate_request_context;
 #endif
@@ -1553,15 +1564,6 @@ int mbedtls_ssl_tls13_parse_supported_groups_ext(
     mbedtls_ssl_context* ssl,
     const unsigned char* buf, size_t len);
 #endif /* MBEDTLS_ECDH_C ||  MBEDTLS_ECDSA_C */
-#if defined(MBEDTLS_SSL_NEW_SESSION_TICKET)
-int mbedtls_ssl_tls13_parse_new_session_ticket_server(
-    mbedtls_ssl_context *ssl, unsigned char *buf, size_t len);
-#endif /* MBEDTLS_SSL_NEW_SESSION_TICKET */
-#if defined(MBEDTLS_KEY_EXCHANGE_SOME_PSK_ENABLED)
-int mbedtls_ssl_tls13_parse_client_psk_identity_ext(
-    mbedtls_ssl_context *ssl,
-    const unsigned char *buf, size_t len);
-#endif /* MBEDTLS_KEY_EXCHANGE_SOME_PSK_ENABLED */
 
 #endif /* MBEDTLS_SSL_PROTO_TLS1_3 */
 
@@ -1571,13 +1573,14 @@ void mbedtls_ssl_optimize_checksum( mbedtls_ssl_context *ssl,
 /*
  * Update checksum of handshake messages.
  */
-void mbedtls_ssl_add_hs_hdr_to_checksum( mbedtls_ssl_context *ssl,
-                                         unsigned hs_type,
-                                         size_t total_hs_len );
 void mbedtls_ssl_add_hs_msg_to_checksum( mbedtls_ssl_context *ssl,
                                          unsigned hs_type,
                                          unsigned char const *msg,
                                          size_t msg_len );
+
+void mbedtls_ssl_add_hs_hdr_to_checksum( mbedtls_ssl_context *ssl,
+                                         unsigned hs_type,
+                                         size_t total_hs_len );
 
 #if defined(MBEDTLS_KEY_EXCHANGE_SOME_PSK_ENABLED)
 #if !defined(MBEDTLS_USE_PSA_CRYPTO)
@@ -1585,11 +1588,13 @@ MBEDTLS_CHECK_RETURN_CRITICAL
 int mbedtls_ssl_psk_derive_premaster( mbedtls_ssl_context *ssl,
                                       mbedtls_key_exchange_type_t key_ex );
 #endif /* !MBEDTLS_USE_PSA_CRYPTO */
-#if defined(MBEDTLS_SSL_CLI_C) && defined(MBEDTLS_SSL_PROTO_TLS1_2)
+#endif /* MBEDTLS_KEY_EXCHANGE_SOME_PSK_ENABLED */
+
+#if defined(MBEDTLS_SSL_HANDSHAKE_WITH_PSK_ENABLED)
+#if defined(MBEDTLS_SSL_CLI_C)
 MBEDTLS_CHECK_RETURN_CRITICAL
 int mbedtls_ssl_conf_has_static_psk( mbedtls_ssl_config const *conf );
 #endif
-
 #if defined(MBEDTLS_USE_PSA_CRYPTO)
 /**
  * Get the first defined opaque PSK by order of precedence:
@@ -1653,53 +1658,7 @@ static inline int mbedtls_ssl_get_psk( const mbedtls_ssl_context *ssl,
 }
 #endif /* MBEDTLS_USE_PSA_CRYPTO */
 
-/* Check if we have any PSK to offer, returns 0 if PSK is available. Assign the
-   psk and ticket if pointers are present.  */
-static inline int mbedtls_ssl_get_psk_to_offer( const mbedtls_ssl_context *ssl,
-    const unsigned char **psk, size_t *psk_len,
-    const unsigned char **psk_identity, size_t *psk_identity_len )
-{
-    int ptrs_present = 0;
-
-    if( psk != NULL && psk_len != NULL &&
-        psk_identity != NULL && psk_identity_len != NULL )
-    {
-        ptrs_present = 1;
-    }
-
-#if defined(MBEDTLS_SSL_PROTO_TLS1_3) && defined(MBEDTLS_SSL_NEW_SESSION_TICKET)
-    /* Check if a ticket has been configured. */
-    if( ssl->session_negotiate != NULL         &&
-        ssl->session_negotiate->ticket != NULL )
-    {
-        if( ptrs_present )
-        {
-            *psk = ssl->session_negotiate->key;
-            *psk_len = ssl->session_negotiate->key_len;
-            *psk_identity = ssl->session_negotiate->ticket;
-            *psk_identity_len = ssl->session_negotiate->ticket_len;
-        }
-        return( 0 );
-    }
-#endif
-
-    /* Check if an external PSK has been configured. */
-    if( ssl->conf->psk != NULL )
-    {
-        if( ptrs_present )
-        {
-            *psk = ssl->conf->psk;
-            *psk_len = ssl->conf->psk_len;
-            *psk_identity = ssl->conf->psk_identity;
-            *psk_identity_len = ssl->conf->psk_identity_len;
-        }
-        return( 0 );
-    }
-
-    return( 1 );
-}
-
-#endif /* MBEDTLS_KEY_EXCHANGE_SOME_PSK_ENABLED */
+#endif /* MBEDTLS_SSL_HANDSHAKE_WITH_PSK_ENABLED */
 
 #if defined(MBEDTLS_PK_C)
 unsigned char mbedtls_ssl_sig_from_pk( mbedtls_pk_context *pk );
@@ -1787,13 +1746,6 @@ uint16_t mbedtls_ssl_read_version( const unsigned char version[2],
 
 void mbedtls_ssl_remove_hs_psk( mbedtls_ssl_context *ssl );
 
-#if defined(MBEDTLS_SSL_PROTO_TLS1_3)
-static inline size_t mbedtls_ssl_hdr_len(const mbedtls_ssl_context* ssl)
-{
-    ((void) ssl);
-    return(5);
-}
-#endif /* MBEDTLS_SSL_PROTO_TLS1_3 */
 
 static inline size_t mbedtls_ssl_in_hdr_len( const mbedtls_ssl_context *ssl )
 {
@@ -1910,7 +1862,6 @@ int mbedtls_ssl_resend_hello_request( mbedtls_ssl_context *ssl );
 #endif /* MBEDTLS_SSL_PROTO_DTLS */
 
 void mbedtls_ssl_set_timer( mbedtls_ssl_context *ssl, uint32_t millisecs );
-
 MBEDTLS_CHECK_RETURN_CRITICAL
 int mbedtls_ssl_check_timer( mbedtls_ssl_context *ssl );
 
@@ -1956,9 +1907,6 @@ int mbedtls_ssl_start_renegotiation( mbedtls_ssl_context *ssl );
 size_t mbedtls_ssl_get_current_mtu( const mbedtls_ssl_context *ssl );
 void mbedtls_ssl_buffering_free( mbedtls_ssl_context *ssl );
 void mbedtls_ssl_flight_free( mbedtls_ssl_flight_item *flight );
-
-int mbedtls_ssl_double_retransmit_timeout( mbedtls_ssl_context *ssl );
-void mbedtls_ssl_reset_retransmit_timeout( mbedtls_ssl_context *ssl );
 #endif /* MBEDTLS_SSL_PROTO_DTLS */
 
 /**
@@ -2039,35 +1987,6 @@ int mbedtls_ssl_tls13_write_client_hello_exts( mbedtls_ssl_context *ssl,
                                                size_t *out_len );
 
 /**
- * \brief Given an SSL context and its associated configuration, write the TLS
- *        1.3 specific Pre-Shared key extension.
- *
- * \param[in]   ssl     SSL context
- * \param[in]   buf     Base address of the buffer where to write the extension
- * \param[in]   end     End address of the buffer where to write the extension
- * \param[out]  out_len Length of the data written into the buffer \p buf
- * \param[out]  binders_len Length of the binders to be written at the end of
- *                          extension
- */
-int mbedtls_ssl_tls13_write_pre_shared_key_ext_without_binders(
-    mbedtls_ssl_context *ssl,
-    unsigned char *buf, unsigned char *end,
-    size_t *out_len, size_t *binders_len );
-
-/**
- * \brief Given an SSL context and its associated configuration, write the TLS
- *        1.3 specific Pre-Shared key extension binders at the end of the
- *        ClientHello.
- *
- * \param[in]   ssl     SSL context
- * \param[in]   buf     Base address of the buffer where to write the extension
- * \param[in]   end     End address of the buffer where to write the extension
- */
-int mbedtls_ssl_tls13_write_pre_shared_key_ext_binders(
-    mbedtls_ssl_context *ssl,
-    unsigned char *buf, unsigned char *end );
-
-/**
  * \brief           TLS 1.3 client side state machine entry
  *
  * \param ssl       SSL context
@@ -2123,24 +2042,8 @@ static inline int mbedtls_ssl_conf_tls13_some_psk_enabled( mbedtls_ssl_context *
                    MBEDTLS_SSL_TLS1_3_KEY_EXCHANGE_MODE_PSK_ALL ) );
 }
 
-static inline int mbedtls_ssl_tls13_kex_check( mbedtls_ssl_context *ssl,
-                                      int kex_mask )
-{
-    return( ( ssl->handshake->key_exchange & kex_mask ) != 0 );
-}
-
-static inline int mbedtls_ssl_tls13_kex_with_psk( mbedtls_ssl_context *ssl )
-{
-    return( mbedtls_ssl_tls13_kex_check( ssl,
-                   MBEDTLS_SSL_TLS1_3_KEY_EXCHANGE_MODE_PSK_ALL ) );
-}
-
-static inline int mbedtls_ssl_tls13_kex_with_ephemeral( mbedtls_ssl_context *ssl )
-{
-    return( mbedtls_ssl_tls13_kex_check( ssl,
-                   MBEDTLS_SSL_TLS1_3_KEY_EXCHANGE_MODE_EPHEMERAL_ALL ) );
-}
-
+#if defined(MBEDTLS_SSL_SRV_C) && \
+    defined(MBEDTLS_SSL_TLS1_3_KEY_EXCHANGE_MODE_SOME_PSK_ENABLED)
 /**
  * Given a list of key exchange modes, check if at least one of them is
  * supported.
@@ -2187,6 +2090,31 @@ static inline int mbedtls_ssl_tls13_some_psk_enabled( mbedtls_ssl_context *ssl )
     return( ! mbedtls_ssl_tls13_check_kex_modes( ssl,
                    MBEDTLS_SSL_TLS1_3_KEY_EXCHANGE_MODE_PSK_ALL ) );
 }
+#endif /* MBEDTLS_SSL_SRV_C &&
+          MBEDTLS_SSL_TLS1_3_KEY_EXCHANGE_MODE_SOME_PSK_ENABLED */
+
+/*
+ * Helper functions to check the selected key exchange mode.
+ */
+static inline int mbedtls_ssl_tls13_key_exchange_mode_check(
+    mbedtls_ssl_context *ssl, int kex_mask )
+{
+    return( ( ssl->handshake->key_exchange_mode & kex_mask ) != 0 );
+}
+
+static inline int mbedtls_ssl_tls13_key_exchange_mode_with_psk(
+    mbedtls_ssl_context *ssl )
+{
+    return( mbedtls_ssl_tls13_key_exchange_mode_check( ssl,
+                   MBEDTLS_SSL_TLS1_3_KEY_EXCHANGE_MODE_PSK_ALL ) );
+}
+
+static inline int mbedtls_ssl_tls13_key_exchange_mode_with_ephemeral(
+    mbedtls_ssl_context *ssl )
+{
+    return( mbedtls_ssl_tls13_key_exchange_mode_check( ssl,
+                   MBEDTLS_SSL_TLS1_3_KEY_EXCHANGE_MODE_EPHEMERAL_ALL ) );
+}
 
 /*
  * Fetch TLS 1.3 handshake message header
@@ -2203,7 +2131,7 @@ int mbedtls_ssl_tls13_fetch_handshake_msg( mbedtls_ssl_context *ssl,
 MBEDTLS_CHECK_RETURN_CRITICAL
 int mbedtls_ssl_tls13_process_certificate( mbedtls_ssl_context *ssl );
 
-#if defined(MBEDTLS_KEY_EXCHANGE_WITH_CERT_ENABLED)
+#if defined(MBEDTLS_SSL_TLS1_3_KEY_EXCHANGE_MODE_EPHEMERAL_ENABLED)
 /*
  * Handler of TLS 1.3 write Certificate message
  */
@@ -2216,7 +2144,7 @@ int mbedtls_ssl_tls13_write_certificate( mbedtls_ssl_context *ssl );
 MBEDTLS_CHECK_RETURN_CRITICAL
 int mbedtls_ssl_tls13_write_certificate_verify( mbedtls_ssl_context *ssl );
 
-#endif /* MBEDTLS_KEY_EXCHANGE_WITH_CERT_ENABLED */
+#endif /* MBEDTLS_SSL_TLS1_3_KEY_EXCHANGE_MODE_EPHEMERAL_ENABLED */
 
 /*
  * Generic handler of Certificate Verify
@@ -2246,10 +2174,11 @@ int mbedtls_ssl_tls13_generate_and_write_ecdh_key_exchange(
 
 #endif /* MBEDTLS_SSL_PROTO_TLS1_3 */
 
-#if defined(MBEDTLS_KEY_EXCHANGE_WITH_CERT_ENABLED)
+#if defined(MBEDTLS_SSL_HANDSHAKE_WITH_CERT_ENABLED)
 /*
  * Write Signature Algorithm extension
  */
+MBEDTLS_CHECK_RETURN_CRITICAL
 int mbedtls_ssl_write_sig_alg_ext( mbedtls_ssl_context *ssl, unsigned char *buf,
                                    const unsigned char *end, size_t *out_len );
 /*
@@ -2259,7 +2188,7 @@ MBEDTLS_CHECK_RETURN_CRITICAL
 int mbedtls_ssl_parse_sig_alg_ext( mbedtls_ssl_context *ssl,
                                    const unsigned char *buf,
                                    const unsigned char *end );
-#endif /* MBEDTLS_KEY_EXCHANGE_WITH_CERT_ENABLED */
+#endif /* MBEDTLS_SSL_HANDSHAKE_WITH_CERT_ENABLED */
 
 /* Get handshake transcript */
 MBEDTLS_CHECK_RETURN_CRITICAL
@@ -2379,7 +2308,7 @@ static inline int mbedtls_ssl_named_group_is_supported( uint16_t named_group )
 static inline const void *mbedtls_ssl_get_sig_algs(
                                                 const mbedtls_ssl_context *ssl )
 {
-#if defined(MBEDTLS_KEY_EXCHANGE_WITH_CERT_ENABLED)
+#if defined(MBEDTLS_SSL_HANDSHAKE_WITH_CERT_ENABLED)
 
 #if !defined(MBEDTLS_DEPRECATED_REMOVED)
     if( ssl->handshake != NULL &&
@@ -2391,17 +2320,14 @@ static inline const void *mbedtls_ssl_get_sig_algs(
 #endif
     return( ssl->conf->sig_algs );
 
-#else /* MBEDTLS_KEY_EXCHANGE_WITH_CERT_ENABLED */
+#else /* MBEDTLS_SSL_HANDSHAKE_WITH_CERT_ENABLED */
 
     ((void) ssl);
     return( NULL );
-#endif /* MBEDTLS_KEY_EXCHANGE_WITH_CERT_ENABLED */
+#endif /* MBEDTLS_SSL_HANDSHAKE_WITH_CERT_ENABLED */
 }
 
-
-#if defined(MBEDTLS_KEY_EXCHANGE_WITH_CERT_ENABLED)
-
-#if defined(MBEDTLS_SSL_PROTO_TLS1_3)
+#if defined(MBEDTLS_SSL_TLS1_3_KEY_EXCHANGE_MODE_EPHEMERAL_ENABLED)
 static inline int mbedtls_ssl_sig_alg_is_received( const mbedtls_ssl_context *ssl,
                                                    uint16_t own_sig_alg )
 {
@@ -2416,8 +2342,80 @@ static inline int mbedtls_ssl_sig_alg_is_received( const mbedtls_ssl_context *ss
     }
     return( 0 );
 }
-#endif /* MBEDTLS_SSL_PROTO_TLS1_3 */
 
+static inline int mbedtls_ssl_tls13_sig_alg_for_cert_verify_is_supported(
+                                                    const uint16_t sig_alg )
+{
+    switch( sig_alg )
+    {
+#if defined(MBEDTLS_ECDSA_C)
+#if defined(PSA_WANT_ALG_SHA_256) && defined(MBEDTLS_ECP_DP_SECP256R1_ENABLED)
+        case MBEDTLS_TLS1_3_SIG_ECDSA_SECP256R1_SHA256:
+            break;
+#endif /* PSA_WANT_ALG_SHA_256 && MBEDTLS_ECP_DP_SECP256R1_ENABLED */
+#if defined(PSA_WANT_ALG_SHA_384) && defined(MBEDTLS_ECP_DP_SECP384R1_ENABLED)
+        case MBEDTLS_TLS1_3_SIG_ECDSA_SECP384R1_SHA384:
+            break;
+#endif /* PSA_WANT_ALG_SHA_384 && MBEDTLS_ECP_DP_SECP384R1_ENABLED */
+#if defined(PSA_WANT_ALG_SHA_512) && defined(MBEDTLS_ECP_DP_SECP521R1_ENABLED)
+        case MBEDTLS_TLS1_3_SIG_ECDSA_SECP521R1_SHA512:
+            break;
+#endif /* PSA_WANT_ALG_SHA_512 && MBEDTLS_ECP_DP_SECP521R1_ENABLED */
+#endif /* MBEDTLS_ECDSA_C */
+
+#if defined(MBEDTLS_PKCS1_V21)
+#if defined(PSA_WANT_ALG_SHA_256)
+        case MBEDTLS_TLS1_3_SIG_RSA_PSS_RSAE_SHA256:
+            break;
+#endif /* PSA_WANT_ALG_SHA_256  */
+#if defined(PSA_WANT_ALG_SHA_384)
+        case MBEDTLS_TLS1_3_SIG_RSA_PSS_RSAE_SHA384:
+            break;
+#endif /* PSA_WANT_ALG_SHA_384 */
+#if defined(PSA_WANT_ALG_SHA_512)
+        case MBEDTLS_TLS1_3_SIG_RSA_PSS_RSAE_SHA512:
+            break;
+#endif /* PSA_WANT_ALG_SHA_512 */
+#endif /* MBEDTLS_PKCS1_V21 */
+        default:
+            return( 0 );
+    }
+    return( 1 );
+
+}
+
+static inline int mbedtls_ssl_tls13_sig_alg_is_supported(
+                                                    const uint16_t sig_alg )
+{
+    switch( sig_alg )
+    {
+#if defined(MBEDTLS_PKCS1_V15)
+#if defined(MBEDTLS_HAS_ALG_SHA_256_VIA_MD_OR_PSA_BASED_ON_USE_PSA)
+        case MBEDTLS_TLS1_3_SIG_RSA_PKCS1_SHA256:
+            break;
+#endif /* MBEDTLS_HAS_ALG_SHA_256_VIA_MD_OR_PSA_BASED_ON_USE_PSA */
+#if defined(MBEDTLS_HAS_ALG_SHA_384_VIA_MD_OR_PSA_BASED_ON_USE_PSA)
+        case MBEDTLS_TLS1_3_SIG_RSA_PKCS1_SHA384:
+            break;
+#endif /* MBEDTLS_HAS_ALG_SHA_384_VIA_MD_OR_PSA_BASED_ON_USE_PSA */
+#if defined(MBEDTLS_HAS_ALG_SHA_512_VIA_MD_OR_PSA_BASED_ON_USE_PSA)
+        case MBEDTLS_TLS1_3_SIG_RSA_PKCS1_SHA512:
+            break;
+#endif /* MBEDTLS_HAS_ALG_SHA_512_VIA_MD_OR_PSA_BASED_ON_USE_PSA */
+#endif /* MBEDTLS_PKCS1_V15 */
+        default:
+            return( mbedtls_ssl_tls13_sig_alg_for_cert_verify_is_supported(
+                                                                    sig_alg ) );
+    }
+    return( 1 );
+}
+
+MBEDTLS_CHECK_RETURN_CRITICAL
+int mbedtls_ssl_tls13_check_sig_alg_cert_key_match( uint16_t sig_alg,
+                                                    mbedtls_pk_context *key );
+#endif /* MBEDTLS_SSL_TLS1_3_KEY_EXCHANGE_MODE_EPHEMERAL_ENABLED */
+
+#if defined(MBEDTLS_SSL_HANDSHAKE_WITH_CERT_ENABLED)
 static inline int mbedtls_ssl_sig_alg_is_offered( const mbedtls_ssl_context *ssl,
                                                   uint16_t proposed_sig_alg )
 {
@@ -2433,7 +2431,7 @@ static inline int mbedtls_ssl_sig_alg_is_offered( const mbedtls_ssl_context *ssl
     return( 0 );
 }
 
-static inline int mbedtls_ssl_tls13_get_pk_type_and_md_alg_from_sig_alg(
+static inline int mbedtls_ssl_get_pk_type_and_md_alg_from_sig_alg(
     uint16_t sig_alg, mbedtls_pk_type_t *pk_type, mbedtls_md_type_t *md_alg )
 {
     *pk_type = mbedtls_ssl_pk_alg_from_sig( sig_alg & 0xff );
@@ -2445,100 +2443,30 @@ static inline int mbedtls_ssl_tls13_get_pk_type_and_md_alg_from_sig_alg(
     switch( sig_alg )
     {
 #if defined(MBEDTLS_PKCS1_V21)
-#if defined(MBEDTLS_SHA256_C)
+#if defined(MBEDTLS_HAS_ALG_SHA_256_VIA_MD_OR_PSA_BASED_ON_USE_PSA)
         case MBEDTLS_TLS1_3_SIG_RSA_PSS_RSAE_SHA256:
             *md_alg = MBEDTLS_MD_SHA256;
             *pk_type = MBEDTLS_PK_RSASSA_PSS;
             break;
-#endif /* MBEDTLS_SHA256_C  */
-#if defined(MBEDTLS_SHA384_C)
+#endif /* MBEDTLS_HAS_ALG_SHA_256_VIA_MD_OR_PSA_BASED_ON_USE_PSA  */
+#if defined(MBEDTLS_HAS_ALG_SHA_384_VIA_MD_OR_PSA_BASED_ON_USE_PSA)
         case MBEDTLS_TLS1_3_SIG_RSA_PSS_RSAE_SHA384:
             *md_alg = MBEDTLS_MD_SHA384;
             *pk_type = MBEDTLS_PK_RSASSA_PSS;
             break;
-#endif /* MBEDTLS_SHA384_C */
-#if defined(MBEDTLS_SHA512_C)
+#endif /* MBEDTLS_HAS_ALG_SHA_384_VIA_MD_OR_PSA_BASED_ON_USE_PSA */
+#if defined(MBEDTLS_HAS_ALG_SHA_512_VIA_MD_OR_PSA_BASED_ON_USE_PSA)
         case MBEDTLS_TLS1_3_SIG_RSA_PSS_RSAE_SHA512:
             *md_alg = MBEDTLS_MD_SHA512;
             *pk_type = MBEDTLS_PK_RSASSA_PSS;
             break;
-#endif /* MBEDTLS_SHA512_C */
+#endif /* MBEDTLS_HAS_ALG_SHA_512_VIA_MD_OR_PSA_BASED_ON_USE_PSA */
 #endif /* MBEDTLS_PKCS1_V21 */
             default:
                 return( MBEDTLS_ERR_SSL_FEATURE_UNAVAILABLE );
         }
         return( 0 );
 }
-
-#if defined(MBEDTLS_SSL_PROTO_TLS1_3)
-static inline int mbedtls_ssl_tls13_sig_alg_for_cert_verify_is_supported(
-                                                    const uint16_t sig_alg )
-{
-    switch( sig_alg )
-    {
-#if defined(MBEDTLS_ECDSA_C)
-#if defined(MBEDTLS_SHA256_C) && defined(MBEDTLS_ECP_DP_SECP256R1_ENABLED)
-        case MBEDTLS_TLS1_3_SIG_ECDSA_SECP256R1_SHA256:
-            break;
-#endif /* MBEDTLS_SHA256_C && MBEDTLS_ECP_DP_SECP256R1_ENABLED */
-#if defined(MBEDTLS_SHA384_C) && defined(MBEDTLS_ECP_DP_SECP384R1_ENABLED)
-        case MBEDTLS_TLS1_3_SIG_ECDSA_SECP384R1_SHA384:
-            break;
-#endif /* MBEDTLS_SHA384_C && MBEDTLS_ECP_DP_SECP384R1_ENABLED */
-#if defined(MBEDTLS_SHA512_C) && defined(MBEDTLS_ECP_DP_SECP521R1_ENABLED)
-        case MBEDTLS_TLS1_3_SIG_ECDSA_SECP521R1_SHA512:
-            break;
-#endif /* MBEDTLS_SHA512_C && MBEDTLS_ECP_DP_SECP521R1_ENABLED */
-#endif /* MBEDTLS_ECDSA_C */
-
-#if defined(MBEDTLS_PKCS1_V21)
-#if defined(MBEDTLS_SHA256_C)
-        case MBEDTLS_TLS1_3_SIG_RSA_PSS_RSAE_SHA256:
-            break;
-#endif /* MBEDTLS_SHA256_C  */
-#if defined(MBEDTLS_SHA384_C)
-        case MBEDTLS_TLS1_3_SIG_RSA_PSS_RSAE_SHA384:
-            break;
-#endif /* MBEDTLS_SHA384_C */
-#if defined(MBEDTLS_SHA512_C)
-        case MBEDTLS_TLS1_3_SIG_RSA_PSS_RSAE_SHA512:
-            break;
-#endif /* MBEDTLS_SHA512_C */
-#endif /* MBEDTLS_PKCS1_V21 */
-        default:
-            return( 0 );
-    }
-    return( 1 );
-
-}
-
-static inline int mbedtls_ssl_tls13_sig_alg_is_supported(
-                                                    const uint16_t sig_alg )
-{
-    switch( sig_alg )
-    {
-#if defined(MBEDTLS_PKCS1_V15)
-#if defined(MBEDTLS_SHA256_C)
-        case MBEDTLS_TLS1_3_SIG_RSA_PKCS1_SHA256:
-            break;
-#endif /* MBEDTLS_SHA256_C */
-#if defined(MBEDTLS_SHA384_C)
-        case MBEDTLS_TLS1_3_SIG_RSA_PKCS1_SHA384:
-            break;
-#endif /* MBEDTLS_SHA384_C */
-#if defined(MBEDTLS_SHA512_C)
-        case MBEDTLS_TLS1_3_SIG_RSA_PKCS1_SHA512:
-            break;
-#endif /* MBEDTLS_SHA512_C */
-#endif /* MBEDTLS_PKCS1_V15 */
-        default:
-            return( mbedtls_ssl_tls13_sig_alg_for_cert_verify_is_supported(
-                                                                    sig_alg ) );
-    }
-    return( 1 );
-}
-
-#endif /* MBEDTLS_SSL_PROTO_TLS1_3 */
 
 #if defined(MBEDTLS_SSL_PROTO_TLS1_2)
 static inline int mbedtls_ssl_tls12_sig_alg_is_supported(
@@ -2550,32 +2478,32 @@ static inline int mbedtls_ssl_tls12_sig_alg_is_supported(
 
     switch( hash )
     {
-#if defined(MBEDTLS_MD5_C)
+#if defined(MBEDTLS_HAS_ALG_MD5_VIA_MD_OR_PSA_BASED_ON_USE_PSA)
         case MBEDTLS_SSL_HASH_MD5:
             break;
 #endif
 
-#if defined(MBEDTLS_SHA1_C)
+#if defined(MBEDTLS_HAS_ALG_SHA_1_VIA_MD_OR_PSA_BASED_ON_USE_PSA)
         case MBEDTLS_SSL_HASH_SHA1:
             break;
 #endif
 
-#if defined(MBEDTLS_SHA224_C)
+#if defined(MBEDTLS_HAS_ALG_SHA_224_VIA_MD_OR_PSA_BASED_ON_USE_PSA)
         case MBEDTLS_SSL_HASH_SHA224:
             break;
 #endif
 
-#if defined(MBEDTLS_SHA256_C)
+#if defined(MBEDTLS_HAS_ALG_SHA_256_VIA_MD_OR_PSA_BASED_ON_USE_PSA)
         case MBEDTLS_SSL_HASH_SHA256:
             break;
 #endif
 
-#if defined(MBEDTLS_SHA384_C)
+#if defined(MBEDTLS_HAS_ALG_SHA_384_VIA_MD_OR_PSA_BASED_ON_USE_PSA)
         case MBEDTLS_SSL_HASH_SHA384:
             break;
 #endif
 
-#if defined(MBEDTLS_SHA512_C)
+#if defined(MBEDTLS_HAS_ALG_SHA_512_VIA_MD_OR_PSA_BASED_ON_USE_PSA)
         case MBEDTLS_SSL_HASH_SHA512:
             break;
 #endif
@@ -2616,26 +2544,17 @@ static inline int mbedtls_ssl_sig_alg_is_supported(
     }
 #endif /* MBEDTLS_SSL_PROTO_TLS1_2 */
 
-#if defined(MBEDTLS_SSL_PROTO_TLS1_3)
+#if defined(MBEDTLS_SSL_TLS1_3_KEY_EXCHANGE_MODE_EPHEMERAL_ENABLED)
     if( ssl->tls_version == MBEDTLS_SSL_VERSION_TLS1_3 )
     {
        return( mbedtls_ssl_tls13_sig_alg_is_supported( sig_alg ) );
     }
-#endif /* MBEDTLS_SSL_PROTO_TLS1_3 */
+#endif
     ((void) ssl);
     ((void) sig_alg);
     return( 0 );
 }
-
-#if defined(MBEDTLS_SSL_PROTO_TLS1_3)
-
-MBEDTLS_CHECK_RETURN_CRITICAL
-int mbedtls_ssl_tls13_check_sig_alg_cert_key_match( uint16_t sig_alg,
-                                                    mbedtls_pk_context *key );
-
-#endif /* MBEDTLS_SSL_PROTO_TLS1_3 */
-
-#endif /* MBEDTLS_KEY_EXCHANGE_WITH_CERT_ENABLED */
+#endif /* MBEDTLS_SSL_HANDSHAKE_WITH_CERT_ENABLED */
 
 #if defined(MBEDTLS_USE_PSA_CRYPTO) || defined(MBEDTLS_SSL_PROTO_TLS1_3)
 /* Corresponding PSA algorithm for MBEDTLS_CIPHER_NULL.
@@ -2790,6 +2709,50 @@ int mbedtls_ssl_check_dtls_clihlo_cookie(
                            const unsigned char *cli_id, size_t cli_id_len,
                            const unsigned char *in, size_t in_len,
                            unsigned char *obuf, size_t buf_len, size_t *olen );
+#endif
+
+#if defined(MBEDTLS_SSL_TLS1_3_KEY_EXCHANGE_MODE_SOME_PSK_ENABLED)
+/**
+ * \brief Given an SSL context and its associated configuration, write the TLS
+ *        1.3 specific Pre-Shared key extension.
+ *
+ * \param[in]   ssl     SSL context
+ * \param[in]   buf     Base address of the buffer where to write the extension
+ * \param[in]   end     End address of the buffer where to write the extension
+ * \param[out]  out_len Length in bytes of the Pre-Shared key extension: data
+ *                      written into the buffer \p buf by this function plus
+ *                      the length of the binders to be written.
+ * \param[out]  binders_len Length of the binders to be written at the end of
+ *                          the extension.
+ */
+MBEDTLS_CHECK_RETURN_CRITICAL
+int mbedtls_ssl_tls13_write_identities_of_pre_shared_key_ext(
+    mbedtls_ssl_context *ssl,
+    unsigned char *buf, unsigned char *end,
+    size_t *out_len, size_t *binders_len );
+
+/**
+ * \brief Given an SSL context and its associated configuration, write the TLS
+ *        1.3 specific Pre-Shared key extension binders at the end of the
+ *        ClientHello.
+ *
+ * \param[in]   ssl     SSL context
+ * \param[in]   buf     Base address of the buffer where to write the binders
+ * \param[in]   end     End address of the buffer where to write the binders
+ */
+MBEDTLS_CHECK_RETURN_CRITICAL
+int mbedtls_ssl_tls13_write_binders_of_pre_shared_key_ext(
+    mbedtls_ssl_context *ssl,
+    unsigned char *buf, unsigned char *end );
+#endif /* MBEDTLS_SSL_TLS1_3_KEY_EXCHANGE_MODE_SOME_PSK_ENABLED */
+
+#if defined(MBEDTLS_SSL_PROTO_TLS1_3) && \
+    defined(MBEDTLS_SSL_SESSION_TICKETS) && \
+    defined(MBEDTLS_SSL_SERVER_NAME_INDICATION) && \
+    defined(MBEDTLS_SSL_CLI_C)
+MBEDTLS_CHECK_RETURN_CRITICAL
+int mbedtls_ssl_session_set_hostname( mbedtls_ssl_session *session,
+                                      const char *hostname );
 #endif
 
 #endif /* ssl_misc.h */

@@ -18,6 +18,9 @@ set(src_crypto
     asn1write.c
     base64.c
     bignum.c
+    bignum_core.c
+    bignum_mod.c
+    bignum_mod_raw.c
     camellia.c
     ccm.c
     chacha20.c
@@ -38,8 +41,11 @@ set(src_crypto
     entropy_poll.c
     error.c
     gcm.c
+    hash_info.c
     hkdf.c
     hmac_drbg.c
+    lmots.c
+    lms.c
     md.c
     md5.c
     memory_buffer_alloc.c
@@ -66,6 +72,7 @@ set(src_crypto
     psa_crypto_ecp.c
     psa_crypto_hash.c
     psa_crypto_mac.c
+    psa_crypto_pake.c
     psa_crypto_rsa.c
     psa_crypto_se.c
     psa_crypto_slot_management.c
